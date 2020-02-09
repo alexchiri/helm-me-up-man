@@ -1,5 +1,5 @@
 namespaces:
-  production
+  production:
 
 helmRepos:
   stable: "https://kubernetes-charts.storage.googleapis.com"

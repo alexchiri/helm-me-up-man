@@ -1,5 +1,5 @@
 namespaces:
-  production
+  production:
 
 helmRepos:
   stable: "https://kubernetes-charts.storage.googleapis.com"
@@ -7,7 +7,7 @@ helmRepos:
 context: logging
 
 apps:
-  datadog:
+  fluentd:
     enabled: true
     namespace: production
     chart: stable/fluentd
