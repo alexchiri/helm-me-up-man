@@ -1,0 +1,15 @@
+namespaces:
+  production
+
+helmRepos:
+  stable: "https://kubernetes-charts.storage.googleapis.com"
+
+context: logging
+
+apps:
+  datadog:
+    enabled: true
+    namespace: production
+    chart: stable/fluentd
+    version: "1.1.0"
+    valuesFile: "values.yaml"
