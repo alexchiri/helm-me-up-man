@@ -1,17 +1,20 @@
 use std::path::PathBuf;
 use structopt::StructOpt;
-use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::BufReader;
 use failure::ResultExt;
 use exitfailure::ExitFailure;
 use url::Url;
-use serde_yaml::{Value, Mapping};
+use serde_yaml::Value;
+use tempfile::{Builder, TempDir, tempfile_in};
+use std::io::copy;
+use std::panic::resume_unwind;
 
 #[derive(Debug)]
 struct Repo {
     name: String,
     url: Url,
+    index_file: File
 }
 
 #[derive(Debug)]
@@ -25,6 +28,7 @@ struct App {
 
 #[derive(Debug)]
 struct Helmsman {
+    repos: Vec<Repo>,
     dsf_path: PathBuf,
     apps: Vec<App>,
 }
@@ -40,20 +44,19 @@ fn main() -> Result<(), ExitFailure> {
     let args = Args::from_args();
     println!("{:?}", args);
 
+    let tmp_dir = Builder::new().prefix("hmum").tempdir()?;
     let helmsman_file_paths = &args.helmsmanconfig.expect("You should provide at least one helmsman config file path!");
-
-    let mut helm_repos: Vec<Repo> = Vec::new();
 
     // Process all the helmsman DSFs and repos
     let mut helmsman_confs = Vec::new();
 
     for helmsman_file_path in helmsman_file_paths {
+        let mut helm_repos: Vec<Repo> = Vec::new();
+
         println!("{:?}", helmsman_file_path);
         let helmsman_file_path_str = helmsman_file_path.to_str().unwrap();
-
-        let helmsman_file = File::open(helmsman_file_path).with_context(|_| format!("Could not open file `{}`", helmsman_file_path_str))?;
-        let helmsman_file_reader = BufReader::new(helmsman_file);
-        let helmsman_config: Value = serde_yaml::from_reader(helmsman_file_reader).with_context(|_| format!("Could not parse helmsman config file `{}`", helmsman_file_path_str))?;
+        let helmsman_config = parse_yaml_file(&helmsman_file_path)
+            .with_context(|_| format!("Failed parsing helmsman DSF `{}`!", helmsman_file_path_str))?;
         println!("{:?}", helmsman_config);
 
         // Process all the repos
@@ -65,9 +68,16 @@ fn main() -> Result<(), ExitFailure> {
             let repo_url_str = helm_repo_conf.1.as_str().expect(&format!("Helm repo URL is not a proper String in `{}`", helmsman_file_path_str));
             let repo_url = Url::parse(repo_url_str).with_context(|_| format!("Could not parse URL in helmsman DSF `{}`", repo_url_str))?;
 
+            let index_yaml_url = &repo_url.join("index.yaml")
+                .with_context(|_| format!("Couldn't build index.yaml url for repo `{}` with url `{}`", &repo_name_str, repo_url_str))?;
+
+            let index_file = download_file_to_temp(&tmp_dir, &index_yaml_url.as_str())
+                .with_context(|_| format!("Failed to download `index.yaml` file for repo `{}` from url `{}`!", &repo_name_str, &index_yaml_url))?;
+
             helm_repos.push(Repo {
                 name: repo_name_str,
                 url: repo_url,
+                index_file
             });
         }
 
@@ -110,21 +120,64 @@ fn main() -> Result<(), ExitFailure> {
                 repo_name: String::from(app_repo_name),
                 chart_name: String::from(app_chart_name),
                 chart_version: String::from(app_chart_version_str),
-                values_file_path: PathBuf::from(app_values_file_str)
+                values_file_path: PathBuf::from(app_values_file_str),
             });
-
         }
 
         println!("{:?}", apps);
 
         helmsman_confs.push(Helmsman {
+            repos: helm_repos,
             dsf_path: PathBuf::from(helmsman_file_path_str),
-            apps
+            apps,
         });
-
     }
 
     println!("{:?}", helmsman_confs);
 
+
+    for helmsman_conf in helmsman_confs {
+        let helmsman_file_path_str = helmsman_conf.dsf_path.to_str().unwrap();
+
+        for app in helmsman_conf.apps {
+            let helm_repo = helmsman_conf.repos.iter().find(|repo| repo.name == app.repo_name)
+                .expect(&format!("Chart repo `{}` used by app `{}` in helmsman DSF `{}` is not declared!", &app.repo_name, &app.name, helmsman_file_path_str));
+
+            let index_yaml = parse_yaml_file(&helm_repo.index_file)
+                .with_context(|_| format!("Failed parsing helmsman DSF `{}`!", helmsman_file_path_str))?;
+
+//            let latest_chart_info = get_latest_chart_info_from_index(&app.chart_name, &index_yaml);
+        }
+    }
+
     Ok(())
+}
+
+//fn get_latest_chart_info_from_index(chart_name: &str, index_yaml_content: &Value) -> Result<Value, failure::Error> {
+//    let entries_value = index_yaml_content.get("entries").with_context(|_| )
+//        .expect(&format!("The helmsman DSF `{}` doesn't define `helmRepos`!", helmsman_file_path_str));
+//
+//}
+
+fn parse_yaml_file(file: &File) -> Result<Value, failure::Error> {
+    let file_reader = BufReader::new(file);
+    let file_content: Value = serde_yaml::from_reader(file_reader).with_context(|_| "Could not parse yaml file!")?;
+
+    Ok(file_content)
+}
+
+fn download_file_to_temp(tmp_dir: &TempDir, target: &str) -> Result<File, failure::Error> {
+    let mut response = ureq::get(target).call();
+    println!("{:?}", response);
+
+    return if response.ok() {
+        let mut temp_file = tempfile_in(tmp_dir.path())
+            .with_context(|_| format!("An error occurred while creating a tempfile in folder `{}`", tmp_dir.path().display()))?;
+
+        copy(&mut response.into_reader(), &mut temp_file)?;
+
+        Ok(temp_file)
+    } else {
+        Err(failure::err_msg(format!("Fetching the file failed with `{}`!", &response.status_line())))
+    }
 }

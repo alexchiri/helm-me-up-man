@@ -52,3 +52,4 @@ TODO
 * Support for Helm charts (need to implement custom parser for the chart parameter to pass name, version and repo)
 * Add more apps in the helmsman examples (maybe from different repos?)
 * Add support for multiple valuesFiles in helmsman.config.yaml parsing
+* Support async in how it downloads files
