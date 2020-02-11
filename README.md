@@ -41,6 +41,10 @@ TODO
 
 ## How to use?
 
+Before having a release, you need to install [Rust](https://www.rust-lang.org/tools/install) and run it from source.
+
+To update the values files in the examples, run `cargo run -- -f examples/datadog/helmsman.config.yaml -f examples/fluentd/helmsman.config.yaml`. If all goes well, the values files will have some changes. The `fluentd` file will also have merge conflicts. 
+
 TODO
 
 ## Assumptions:
@@ -54,3 +58,4 @@ TODO
 * Add support for multiple valuesFiles in helmsman.config.yaml parsing
 * Support async in how it downloads files
 * Parse the same index.yaml file only once
+* Update chart version in helmsman DSF

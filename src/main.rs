@@ -1,9 +1,9 @@
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
 use structopt::StructOpt;
 use std::fs::File;
 use std::io::BufReader;
 use url::Url;
-use serde_yaml::Value;
+use serde_yaml::{Value};
 use tempfile::{Builder, TempDir};
 use std::io::copy;
 use anyhow::{Context, Result};
@@ -11,7 +11,7 @@ use rand::{thread_rng, Rng};
 use rand::distributions::Alphanumeric;
 use flate2::read::GzDecoder;
 use tar::Archive;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
 #[derive(Debug)]
 struct Repo {
@@ -56,32 +56,19 @@ fn main() -> Result<()> {
     for helmsman_file_path in helmsman_file_paths {
         let mut helm_repos: Vec<Repo> = Vec::new();
 
-        println!("{:?}", helmsman_file_path);
         let helmsman_file_path_str = helmsman_file_path.to_str().unwrap();
         let helmsman_config = parse_yaml_file(&helmsman_file_path)
             .with_context(|| format!("Failed parsing helmsman DSF `{}`!", helmsman_file_path_str))?;
-        println!("{:?}", helmsman_config);
 
         // Process all the repos
         let helm_repos_value = helmsman_config.get("helmRepos").expect(&format!("The helmsman DSF `{}` doesn't define `helmRepos`!", helmsman_file_path_str));
         let helm_repos_conf = helm_repos_value.as_mapping().expect(&format!("The `helmRepos` syntax in helmsman DSF `{}` is incorrect!", helmsman_file_path_str));
 
         for helm_repo_conf in helm_repos_conf.iter() {
-            let repo_name_str: String = String::from(helm_repo_conf.0.as_str().expect(&format!("Helm repo name is not a proper String in `{}`", helmsman_file_path_str)));
-            let repo_url_str = helm_repo_conf.1.as_str().expect(&format!("Helm repo URL is not a proper String in `{}`", helmsman_file_path_str));
-            let repo_url = Url::parse(repo_url_str).with_context(|| format!("Could not parse URL in helmsman DSF `{}`", repo_url_str))?;
+            let helm_repo_info = get_helm_repo_info(helm_repo_conf, &tmp_dir)
+                .with_context(|| format!("Couldn't get helm repo info from helmsman DSF `{}`!", helmsman_file_path_str))?;
 
-            let index_yaml_url = &repo_url.join("index.yaml")
-                .with_context(|| format!("Couldn't build index.yaml url for repo `{}` with url `{}`", &repo_name_str, repo_url_str))?;
-
-            let index_file_path = download_file_to_temp(&tmp_dir, &index_yaml_url.as_str())
-                .with_context(|| format!("Failed to download `index.yaml` file for repo `{}` from url `{}`!", &repo_name_str, &index_yaml_url))?;
-
-            helm_repos.push(Repo {
-                name: repo_name_str,
-                url: repo_url,
-                index_file: index_file_path
-            });
+            helm_repos.push(helm_repo_info);
         }
 
         println!("{:?}", helm_repos);
@@ -92,39 +79,12 @@ fn main() -> Result<()> {
         let apps_conf = apps_conf_value.as_mapping().expect(&format!("The `apps` syntax in helmsman DSF `{}` is incorrect!", helmsman_file_path_str));
 
         for (index, app_conf) in apps_conf.iter().enumerate() {
-            let app_name_str: String = String::from(app_conf.0.as_str()
-                .expect(&format!("The name of the app with index `{}` is not a proper String in `{}`", index, helmsman_file_path_str)));
-            let app_conf_mapping = app_conf.1.as_mapping()
-                .expect(&format!("The syntax of the app `{}` in helmsman DSF `{}` is incorrect!", &app_name_str, helmsman_file_path_str));
+            let helmsman_file_parent_path = helmsman_file_path.parent().unwrap();
 
-            let chart_key: Value = "chart".into();
-            let app_repo_chart = app_conf_mapping.get(&chart_key)
-                .expect(&format!("App `{}` is missing the `chart` property in helmsman DSF `{}`", &app_name_str, helmsman_file_path_str));
-            let app_repo_chart_str = app_repo_chart.as_str()
-                .expect(&format!("The value of the `chart` property in app `{}` in helmsman DSF `{}` is not a proper String!", &app_name_str, helmsman_file_path_str));
-            let app_repo_chart_split = app_repo_chart_str.split("/").collect::<Vec<&str>>();
-            let app_repo_name = app_repo_chart_split[0];
-            let app_chart_name = app_repo_chart_split[1];
+            let app = get_app_info(app_conf, &helmsman_file_parent_path)
+                .with_context(|| format!("Couldn't get app info from app with index `{}` in helmsman DSF `{}`", index, helmsman_file_path_str))?;
 
-            let chart_version_key: Value = "version".into();
-            let app_chart_version = app_conf_mapping.get(&chart_version_key)
-                .expect(&format!("App `{}` is missing the `version` property in helmsman DSF `{}`", &app_name_str, helmsman_file_path_str));
-            let app_chart_version_str = app_chart_version.as_str()
-                .expect(&format!("The value of the `version` property in app `{}` in helmsman DSF `{}` is not a proper String!", &app_name_str, helmsman_file_path_str));
-
-            let chart_values_key: Value = "valuesFile".into();
-            let app_values_file = app_conf_mapping.get(&chart_values_key)
-                .expect(&format!("App `{}` is missing the `valuesFile` property in helmsman DSF `{}`", &app_name_str, helmsman_file_path_str));
-            let app_values_file_str = app_values_file.as_str()
-                .expect(&format!("The value of the `valuesFile` property in app `{}` in helmsman DSF `{}` is not a proper String!", &app_name_str, helmsman_file_path_str));
-
-            apps.push(App {
-                name: app_name_str,
-                repo_name: String::from(app_repo_name),
-                chart_name: String::from(app_chart_name),
-                chart_version: String::from(app_chart_version_str),
-                values_file_path: PathBuf::from(app_values_file_str),
-            });
+            apps.push(app);
         }
 
         println!("{:?}", apps);
@@ -146,16 +106,11 @@ fn main() -> Result<()> {
             let helm_repo = helmsman_conf.repos.iter().find(|repo| repo.name == app.repo_name)
                 .expect(&format!("Chart repo `{}` used by app `{}` in helmsman DSF `{}` is not declared!", &app.repo_name, &app.name, helmsman_file_path_str));
 
-            println!("{:?}", &helm_repo.index_file);
-            std::thread::sleep(std::time::Duration::from_secs(30));
-
             let index_yaml = parse_yaml_file(&helm_repo.index_file)
                 .with_context(|| format!("Failed parsing index.yaml file for repo `{}` with url `{}` from helmsman DSF file `{}`!", &helm_repo.name, &helm_repo.url.as_str(), helmsman_file_path_str))?;
 
-            let latest_chart_info = get_latest_chart_info_from_index(&app.chart_name, &index_yaml)
+            let latest_chart_info = get_latest_chart_info(&app.chart_name, &index_yaml)
                 .with_context(|| format!("Could not find chart info for `{}` in index.yaml file for repo `{}` with url `{}` from helmsman DSF file `{}`!", &app.chart_name, &helm_repo.name, &helm_repo.url.as_str(), helmsman_file_path_str))?;
-
-            println!("Latest chart info {:?}", latest_chart_info);
 
             let latest_chart_version = latest_chart_info.get("version")
                 .with_context(|| format!("Could not find the `version` property in the latest chart version for chart `{}!", &app.chart_name))?;
@@ -163,32 +118,112 @@ fn main() -> Result<()> {
             let latest_chart_version_str = latest_chart_version.as_str().unwrap();
 
             if latest_chart_version_str != &app.chart_version {
-                let latest_chart_values_file_path = get_latest_version_values_file(&tmp_dir, &latest_chart_info)
-                    .with_context(|| format!("Couldn't retrieve the latest values file for chart `{}`", &app.chart_name))?;
+                let latest_values_file_path = get_values_file(&tmp_dir, &latest_chart_info)
+                    .with_context(|| format!("Couldn't retrieve the latest({}) values file for chart `{}`!", latest_chart_version_str, &app.chart_name))?;
 
-                let current_chart_values_file_path = get_current_version_values_file(&tmp_dir, &app.chart_name, &app.chart_version, &index_yaml)?;
+                let original_chart_info = get_chart_info_for_version(&app.chart_name, &app.chart_version, &index_yaml)
+                    .with_context(|| format!("Couldn't retrieve chart info for chart `{}` and version `{}`!", &app.chart_name, &app.chart_version))?;
 
-//                let current_chart_archive_path =
+                let original_values_file_path = get_values_file(&tmp_dir, original_chart_info)
+                    .with_context(|| format!("Couldn't retrieve original({}) values file for chart `{}`!", &app.chart_version, &app.chart_name))?;
 
+                let current_values_file_path_str = app.values_file_path.to_str().unwrap();
+                let latest_values_file_path_str = latest_values_file_path.to_str().unwrap();
+                let original_values_file_path_str = original_values_file_path.to_str().unwrap();
 
+                let exit_status = merge_values_files(current_values_file_path_str, latest_values_file_path_str, original_values_file_path_str)
+                    .with_context(|| format!("An error occurred while merging current values file `{}` with its original `{}` and its latest version `{}`!",
+                                                     current_values_file_path_str,
+                                                     original_values_file_path_str,
+                                                     latest_values_file_path_str))?;
 
-//                Command::new("git")
-//                    .arg("merge-file")
-//                    .arg(app.values_file_path.to_str().unwrap())
-//                    .
-                println!("{:?}", latest_chart_values_file_path);
+                if exit_status.success() {
+                    println!("Values files were merged successfully!");
+                } else {
+                    println!("Values files were merged with conflicts!");
+                }
             }
         }
     }
 
     Ok(())
 }
+// This function also downloads a file. That is a bad smell that I'll have to live with for now.
+fn get_helm_repo_info(helm_repo_conf: (&Value, &Value), tmp_dir: &TempDir) -> Result<Repo> {
+    let repo_name_str: String = String::from(helm_repo_conf.0.as_str().with_context(|| "Helm repo name is not a proper String!")?);
 
-fn get_current_version_values_file(tmp_dir: &TempDir, chart_name: &str, chart_version: &str, index_yaml_content: &Value) -> Result<PathBuf> {
-    let current_version_chart_info = get_current_version_chart_info(chart_name, chart_version, index_yaml_content)?;
+    let repo_url_str = helm_repo_conf.1.as_str()
+        .with_context(|| "Helm repo URL is not a proper String!")?;
+    let repo_url = Url::parse(repo_url_str)
+        .with_context(|| format!("Could not parse URL in helmsman DSF `{}`", repo_url_str))?;
+
+    let index_yaml_url = &repo_url.join("index.yaml")
+        .with_context(|| format!("Couldn't build index.yaml url for repo `{}` with url `{}`", &repo_name_str, repo_url_str))?;
+    let index_file_path = download_file_to_temp(&tmp_dir, &index_yaml_url.as_str())
+        .with_context(|| format!("Failed to download `index.yaml` file for repo `{}` from url `{}`!", &repo_name_str, &index_yaml_url))?;
+
+    return Ok(Repo {
+        name: repo_name_str,
+        url: repo_url,
+        index_file: index_file_path
+    });
 }
 
-fn get_current_version_chart_info<'a>(chart_name: &str, chart_version: &str, index_yaml_content: &'a Value) -> Result<&'a Value> {
+fn get_app_info(app_conf: (&Value, &Value), helmsman_conf_parent_path: &Path) -> Result<App> {
+    let app_name_str: String = String::from(app_conf.0.as_str().with_context(|| "The name of the app is not a proper String!")?);
+    let app_conf_mapping = app_conf.1.as_mapping()
+        .with_context(|| format!("The syntax of the app `{}` is incorrect!", &app_name_str))?;
+
+    let chart_key: Value = "chart".into();
+    let app_repo_chart = app_conf_mapping.get(&chart_key)
+        .with_context(|| format!("App `{}` is missing the `chart` property!", &app_name_str))?;
+    let app_repo_chart_str = app_repo_chart.as_str()
+        .with_context(|| format!("The value of the `chart` property in app `{}` is not a proper String!", &app_name_str))?;
+
+    let app_repo_chart_split = app_repo_chart_str.split("/").collect::<Vec<&str>>();
+    let app_repo_name = app_repo_chart_split[0];
+    let app_chart_name = app_repo_chart_split[1];
+
+    let chart_version_key: Value = "version".into();
+    let app_chart_version = app_conf_mapping.get(&chart_version_key)
+        .with_context(|| format!("App `{}` is missing the `version` property!", &app_name_str))?;
+    let app_chart_version_str = app_chart_version.as_str()
+        .with_context(|| format!("The value of the `version` property in app `{}` is not a proper String!", &app_name_str))?;
+
+    let chart_values_key: Value = "valuesFile".into();
+    let app_values_file = app_conf_mapping.get(&chart_values_key)
+        .with_context(|| format!("App `{}` is missing the `valuesFile` property!", &app_name_str))?;
+    let app_values_file_relative_path_str = app_values_file.as_str()
+        .with_context(|| format!("The value of the `valuesFile` property in app `{}` is not a proper String!", &app_name_str))?;
+
+    let values_file_path = helmsman_conf_parent_path.join(app_values_file_relative_path_str);
+
+    return Ok(App {
+        name: app_name_str,
+        repo_name: String::from(app_repo_name),
+        chart_name: String::from(app_chart_name),
+        chart_version: String::from(app_chart_version_str),
+        values_file_path,
+    });
+}
+
+
+fn merge_values_files(current_values_file_path_str: &str, latest_values_file_path_str: &str, original_values_file_path_str: &str) -> Result<ExitStatus> {
+     let exit_status =  Command::new("git")
+        .arg("merge-file")
+        .arg(current_values_file_path_str)
+        .arg(original_values_file_path_str)
+        .arg(latest_values_file_path_str)
+        .status()
+        .with_context(|| format!("Error happened while merging current values file `{}` with its original `{}` and its latest version `{}`!",
+                                 current_values_file_path_str,
+                                 original_values_file_path_str,
+                                 latest_values_file_path_str))?;
+
+    return Ok(exit_status);
+}
+
+fn get_chart_info_for_version<'a>(chart_name: &str, chart_version: &str, index_yaml_content: &'a Value) -> Result<&'a Value> {
     let entries_value = index_yaml_content.get("entries")
         .with_context(|| "The index.yaml file doesn't have `entries`!")?;
 
@@ -198,15 +233,23 @@ fn get_current_version_chart_info<'a>(chart_name: &str, chart_version: &str, ind
     let chart_versions_seq = chart_versions.as_sequence()
         .with_context(|| format!("The syntax of the chart entries for chart `{}` is incorrect!", chart_name))?;
 
-    let current_version_chart_info = chart_versions_seq.iter().find(filter_chart_versions_info)?;
+    let chart_info_version_filter = |chart_info: &&Value| {
+        let version = chart_info.get("version").unwrap();
+
+        version == chart_version
+    };
+
+    let current_version_chart_info = chart_versions_seq.iter().find(chart_info_version_filter)
+        .with_context(|| format!("Could not find the chart version `{}` for chart `{}`", chart_version, chart_name))?;
+
+    return Ok(current_version_chart_info);
 }
 
-fn filter_chart_versions_info(chart_info: &Value) -> bool {
-    return true;
-}
 
-fn get_latest_version_values_file(tmp_dir: &TempDir, latest_chart_info: &Value) -> Result<PathBuf> {
-    let chart_name = latest_chart_info.get("name").with_context(|| "Couldn't find property `name` in chart info!")?.as_str().unwrap();
+
+fn get_values_file(tmp_dir: &TempDir, latest_chart_info: &Value) -> Result<PathBuf> {
+    let chart_name = latest_chart_info.get("name")
+        .with_context(|| "Couldn't find property `name` in chart info!")?.as_str().unwrap();
 
     let latest_chart_archive_path = download_chart_archive(&tmp_dir, latest_chart_info)
         .with_context(|| "Couldn't download the latest chart archive!")?;
@@ -231,7 +274,7 @@ fn download_chart_archive(tmp_dir: &TempDir, latest_chart_info: &Value) -> Resul
     return Ok(latest_chart_archive_path);
 }
 
-fn get_latest_chart_info_from_index<'a>(chart_name: &str, index_yaml_content: &'a Value) -> Result<&'a Value> {
+fn get_latest_chart_info<'a>(chart_name: &str, index_yaml_content: &'a Value) -> Result<&'a Value> {
     let entries_value = index_yaml_content.get("entries")
         .with_context(|| "The index.yaml file doesn't have `entries`!")?;
 
@@ -250,7 +293,6 @@ fn get_latest_chart_info_from_index<'a>(chart_name: &str, index_yaml_content: &'
 }
 
 fn parse_yaml_file(file_path: &PathBuf) -> Result<Value> {
-    println!("{:?}", file_path);
     let file_path_str = file_path.to_str().unwrap();
     let file = File::open(file_path)
         .with_context(|| format!("Could not open file `{}`", file_path_str))?;
