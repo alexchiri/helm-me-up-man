@@ -9,10 +9,10 @@ environment:
 
   matrix:
     # MinGW
-    - TARGET: x86_64-pc-windows-gnu
+    - TARGET: x86_64-pc-windows-gnu DISABLE_TESTS=1
 
     # MSVC
-    - TARGET: x86_64-pc-windows-msvc
+    - TARGET: x86_64-pc-windows-msvc DISABLE_TESTS=1
 
 install:
   - ps: >-
