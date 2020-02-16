@@ -19,7 +19,11 @@ main() {
 
     cross rustc --bin hmum --target $TARGET --release -- -C lto
 
-    cp target/$TARGET/release/hmum $stage/
+    if test -f target/$TARGET/release/hmum; then
+      cp target/$TARGET/release/hmum $stage/
+    else
+      cp target/$TARGET/release/hmum.exe $stage/
+    fi
 
     cd $stage
     tar czf $src/$CRATE_NAME-$TRAVIS_TAG-$TARGET.tar.gz *
