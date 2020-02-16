@@ -51,7 +51,6 @@ TODO
 
 ## TODOs:
 
-* Add logs using proper levels
 * Take into account the different line endings
 * Add support for multiple valuesFiles in helmsman.config.yaml parsing
 * Add more apps in the helmsman examples (maybe from different repos?)
