@@ -58,4 +58,5 @@ TODO
 * Add support for multiple valuesFiles in helmsman.config.yaml parsing
 * Support async in how it downloads files
 * Parse the same index.yaml file only once
-* Update chart version in helmsman DSF
+* Take into account the different line endings
+* Support for flag to commit to branch - including to add information about the update in the commit message

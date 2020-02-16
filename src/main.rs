@@ -12,6 +12,9 @@ use rand::distributions::Alphanumeric;
 use flate2::read::GzDecoder;
 use tar::Archive;
 use std::process::{Command, ExitStatus};
+use log::{info, warn, debug};
+use regex::NoExpand;
+use std::borrow::BorrowMut;
 
 #[derive(Debug)]
 struct Repo {
@@ -41,14 +44,16 @@ struct Helmsman {
 struct Args {
     #[structopt(short = "f", long, parse(from_os_str))]
     helmsmanconfig: Option<Vec<PathBuf>>,
+
+    #[structopt(flatten)]
+    verbose: clap_verbosity_flag::Verbosity
 }
 
 fn main() -> Result<()> {
     let args = Args::from_args();
-    println!("{:?}", args);
 
     let tmp_dir = Builder::new().prefix("hmum").tempdir()?;
-    let helmsman_file_paths = &args.helmsmanconfig.expect("You should provide at least one helmsman config file path!");
+    let helmsman_file_paths = &args.helmsmanconfig.with_context(|| "You should provide at least one helmsman config file path!")?;
 
     // Process all the helmsman DSFs and repos
     let mut helmsman_confs = Vec::new();
@@ -61,8 +66,10 @@ fn main() -> Result<()> {
             .with_context(|| format!("Failed parsing helmsman DSF `{}`!", helmsman_file_path_str))?;
 
         // Process all the repos
-        let helm_repos_value = helmsman_config.get("helmRepos").expect(&format!("The helmsman DSF `{}` doesn't define `helmRepos`!", helmsman_file_path_str));
-        let helm_repos_conf = helm_repos_value.as_mapping().expect(&format!("The `helmRepos` syntax in helmsman DSF `{}` is incorrect!", helmsman_file_path_str));
+        let helm_repos_value = helmsman_config.get("helmRepos")
+            .with_context(|| format!("The helmsman DSF `{}` doesn't define `helmRepos`!", helmsman_file_path_str))?;
+        let helm_repos_conf = helm_repos_value.as_mapping()
+            .with_context(|| format!("The `helmRepos` syntax in helmsman DSF `{}` is incorrect!", helmsman_file_path_str))?;
 
         for helm_repo_conf in helm_repos_conf.iter() {
             let helm_repo_info = get_helm_repo_info(helm_repo_conf, &tmp_dir)
@@ -71,12 +78,12 @@ fn main() -> Result<()> {
             helm_repos.push(helm_repo_info);
         }
 
-        println!("{:?}", helm_repos);
-
         // Process all the apps
         let mut apps: Vec<App> = Vec::new();
-        let apps_conf_value = helmsman_config.get("apps").expect(&format!("The helmsman DSF `{}` doesn't define `apps`!", helmsman_file_path_str));
-        let apps_conf = apps_conf_value.as_mapping().expect(&format!("The `apps` syntax in helmsman DSF `{}` is incorrect!", helmsman_file_path_str));
+        let apps_conf_value = helmsman_config.get("apps")
+            .with_context(|| format!("The helmsman DSF `{}` doesn't define `apps`!", helmsman_file_path_str))?;
+        let apps_conf = apps_conf_value.as_mapping()
+            .with_context(|| format!("The `apps` syntax in helmsman DSF `{}` is incorrect!", helmsman_file_path_str))?;
 
         for (index, app_conf) in apps_conf.iter().enumerate() {
             let helmsman_file_parent_path = helmsman_file_path.parent().unwrap();
@@ -87,8 +94,6 @@ fn main() -> Result<()> {
             apps.push(app);
         }
 
-        println!("{:?}", apps);
-
         helmsman_confs.push(Helmsman {
             repos: helm_repos,
             dsf_path: PathBuf::from(helmsman_file_path_str),
@@ -96,15 +101,12 @@ fn main() -> Result<()> {
         });
     }
 
-    println!("{:?}", helmsman_confs);
-
-
     for helmsman_conf in helmsman_confs {
         let helmsman_file_path_str = helmsman_conf.dsf_path.to_str().unwrap();
 
         for app in helmsman_conf.apps {
             let helm_repo = helmsman_conf.repos.iter().find(|repo| repo.name == app.repo_name)
-                .expect(&format!("Chart repo `{}` used by app `{}` in helmsman DSF `{}` is not declared!", &app.repo_name, &app.name, helmsman_file_path_str));
+                .with_context(|| format!("Chart repo `{}` used by app `{}` in helmsman DSF `{}` is not declared!", &app.repo_name, &app.name, helmsman_file_path_str))?;
 
             let index_yaml = parse_yaml_file(&helm_repo.index_file)
                 .with_context(|| format!("Failed parsing index.yaml file for repo `{}` with url `{}` from helmsman DSF file `{}`!", &helm_repo.name, &helm_repo.url.as_str(), helmsman_file_path_str))?;
@@ -142,12 +144,39 @@ fn main() -> Result<()> {
                 } else {
                     println!("Values files were merged with conflicts!");
                 }
+
+                let update_helmsman_result = update_helmsman_version(&helmsman_conf.dsf_path, &app.name, &app.chart_version, latest_chart_version_str);
+                if update_helmsman_result.is_ok() {
+                    println!("`{}` version was updated in helmsman DSF `{}` to `{}`!", &app.name, &helmsman_conf.dsf_path.to_str().unwrap(), latest_chart_version_str)
+                } else {
+                    println!("Failed to update `{}` version in helmsman DSF `{}` to `{}`!", &app.name, &helmsman_conf.dsf_path.to_str().unwrap(), latest_chart_version_str);
+                    return Err(anyhow::anyhow!("Failed to update `{}` version in helmsman DSF `{}` to `{}`!", &app.name, &helmsman_conf.dsf_path.to_str().unwrap(), latest_chart_version_str));
+                }
             }
         }
     }
 
     Ok(())
 }
+
+fn update_helmsman_version(helmsman_file_path: &PathBuf, app_name: &str, current_app_version: &str, latest_app_version: &str) -> Result<()> {
+    let helmsman_content_str = std::fs::read_to_string(helmsman_file_path).unwrap();
+    let regex = regex::Regex::new(format!(r#"(version:[\s]*")({})(")"#, current_app_version).as_str()).unwrap();
+
+    let version_captures = regex.captures(&helmsman_content_str).unwrap();
+
+    if version_captures.len() == 4 {
+        let updated_helmsman_content_str = regex.replace(&helmsman_content_str, format!("${{1}}{}${{3}}", latest_app_version).as_str()).to_string();
+        std::fs::write(helmsman_file_path, updated_helmsman_content_str)
+            .with_context(|| format!("Failed to write to the helmsman DSF `{}` to update version!", helmsman_file_path.to_str().unwrap()))?;
+        Ok(())
+    } else if version_captures.len() > 4 {
+        Err(anyhow::anyhow!("Found multiple matches for the version in the helmsman DSF `{}`! Didn't update the version in the helmsman DSF.", helmsman_file_path.to_str().unwrap()))
+    } else {
+        Err(anyhow::anyhow!("Couldn't find the version to update in the helmsman DSF `{}`! Did the file change in the meantime?", helmsman_file_path.to_str().unwrap()))
+    }
+}
+
 // This function also downloads a file. That is a bad smell that I'll have to live with for now.
 fn get_helm_repo_info(helm_repo_conf: (&Value, &Value), tmp_dir: &TempDir) -> Result<Repo> {
     let repo_name_str: String = String::from(helm_repo_conf.0.as_str().with_context(|| "Helm repo name is not a proper String!")?);
@@ -287,8 +316,6 @@ fn get_latest_chart_info<'a>(chart_name: &str, index_yaml_content: &'a Value) ->
     let latest_chart_info = chart_versions_seq.first()
         .with_context(|| format!("Could not get the latest chart entry for the chart `{}`!", chart_name))?;
 
-    println!("{:?}", latest_chart_info);
-
     Ok(latest_chart_info)
 }
 
@@ -304,7 +331,6 @@ fn parse_yaml_file(file_path: &PathBuf) -> Result<Value> {
 
 fn download_file_to_temp(tmp_dir: &TempDir, target: &str) -> Result<PathBuf> {
     let response = ureq::get(target).call();
-    println!("{:?}", response);
     let temp_file_path = tmp_dir.path().join(generate_rand_filename());
 
     return if response.ok() {
