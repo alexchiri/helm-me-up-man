@@ -51,12 +51,13 @@ TODO
 
 ## TODOs:
 
+* Add logs using proper levels
+* Take into account the different line endings
+* Add support for multiple valuesFiles in helmsman.config.yaml parsing
+* Add more apps in the helmsman examples (maybe from different repos?)
+* Support for flag to commit to branch - including to add information about the update in the commit message
 * Docs
 * Tests
 * Support for Helm charts (need to implement custom parser for the chart parameter to pass name, version and repo)
-* Add more apps in the helmsman examples (maybe from different repos?)
-* Add support for multiple valuesFiles in helmsman.config.yaml parsing
 * Support async in how it downloads files
 * Parse the same index.yaml file only once
-* Take into account the different line endings
-* Support for flag to commit to branch - including to add information about the update in the commit message
