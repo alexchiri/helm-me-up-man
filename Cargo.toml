@@ -1,6 +1,6 @@
 [package]
 name = "hmum"
-version = "0.1.4"
+version = "0.1.5"
 authors = ["Alexandru Chiritescu <alex@alexchiri.com>"]
 edition = "2018"
 
