@@ -1,5 +1,6 @@
 # Helm me up, man! (hmum)
-A simple tool to help automate some parts of the work needed to update Kubernetes deployments done with [Helm 3](https://helm.sh/) and/or [helmsman](https://github.com/Praqma/helmsman).
+A simple tool to help automate some parts of the work needed to update Kubernetes deployments done with 
+ [helmsman](https://github.com/Praqma/helmsman).
 
 ## Why would this be useful?
 
@@ -37,23 +38,20 @@ Ideally, a pipeline would run `hmum` against a repo where the information about 
 
 `hmum` requires [`git merge-file`](https://git-scm.com/docs/git-merge-file) (part of the general installation of `git` on all platforms) to be already installed as it uses it merge the values files.
 
-TODO
+Download binary for your OS from the [releases page](https://github.com/alexchiri/helm-me-up-man/releases), unpack and run the binary. 
 
 ## How to use?
+Simply pass as many helmsman DSFs using the `-f` option of the CLI.
 
-Before having a release, you need to install [Rust](https://www.rust-lang.org/tools/install) and run it from source.
-
-To update the values files in the examples, run `cargo run -- -f examples/datadog/helmsman.config.yaml -f examples/fluentd/helmsman.config.yaml`. If all goes well, the values files will have some changes. The `fluentd` file will also have merge conflicts. 
-
-TODO
+For example, to update the values files in the examples, run `hmum -f examples/infra.helmsman.config.yaml -f examples/monitoring.helmsman.config.yaml`. If all goes well, the values files will have some changes. The `fluentd` file will also have merge conflicts. 
 
 ## Assumptions:
+* All helm repos used in a helmsman DSF are defined in the `helmRepos` property. This property is optional according to the [helmsman DSF specification](https://github.com/Praqma/helmsman/blob/master/docs/desired_state_specification.md#helm-repos), but unless is specified, then `hmum` cannot know what URL should a repo have.
+* If you use the `valuesFiles` property to provide a list of values files, the first is the one that will be used for the merge.
 
 ## TODOs:
 
 * Take into account the different line endings
-* Add support for multiple valuesFiles in helmsman.config.yaml parsing
-* Add more apps in the helmsman examples (maybe from different repos?)
 * Support for flag to commit to branch - including to add information about the update in the commit message
 * Docs
 * Tests

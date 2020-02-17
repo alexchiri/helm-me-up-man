@@ -24,10 +24,10 @@ struct Repo {
 #[derive(Debug)]
 struct App {
     name: String,
-    repo_name: String,
-    chart_name: String,
+    repo_name: Option<String>,
+    chart_name: Option<String>,
     chart_version: String,
-    values_file_path: PathBuf,
+    values_file_path: Option<PathBuf>
 }
 
 #[derive(Debug)]
@@ -72,53 +72,72 @@ fn main() -> Result<()> {
         debug!("Starting to go through all the apps in helmsman DSF `{}`.", helmsman_file_path_str);
 
         for app in helmsman_conf.apps {
-            let helm_repo = helmsman_conf.repos.iter().find(|repo| repo.name == app.repo_name)
-                .with_context(|| format!("Chart repo `{}` used by app `{}` in helmsman DSF `{}` is not declared!", &app.repo_name, &app.name, helmsman_file_path_str))?;
+            if app.repo_name.is_none() || app.chart_name.is_none() {
+                debug!("App `{}` doesn't have a repo name or a chart name or both! Skipping it!", &app.name);
+                continue;
+            }
+
+            let app_chart_name = &app.chart_name.unwrap();
+            let app_repo_name = &app.repo_name.unwrap();
+            let app_name = &app.name;
+            let app_chart_version = &app.chart_version;
+
+            let helm_repo = helmsman_conf.repos.iter().find(|repo| repo.name == *app_repo_name)
+                .with_context(|| format!("Chart repo `{}` used by app `{}` in helmsman DSF `{}` is not declared!", app_repo_name, app_name, helmsman_file_path_str))?;
 
             let index_yaml = parse_yaml_file(&helm_repo.index_file)
                 .with_context(|| format!("Failed parsing index.yaml file for repo `{}` with url `{}` from helmsman DSF file `{}`!", &helm_repo.name, &helm_repo.url.as_str(), helmsman_file_path_str))?;
 
-            let latest_chart_info = get_latest_chart_info(&app.chart_name, &index_yaml)
-                .with_context(|| format!("Could not find chart info for `{}` in index.yaml file for repo `{}` with url `{}` from helmsman DSF file `{}`!", &app.chart_name, &helm_repo.name, &helm_repo.url.as_str(), helmsman_file_path_str))?;
+            let latest_chart_info = get_latest_chart_info(&app_chart_name, &index_yaml)
+                .with_context(|| format!("Could not find chart info for `{}` in index.yaml file for repo `{}` with url `{}` from helmsman DSF file `{}`!", app_chart_name, &helm_repo.name, &helm_repo.url.as_str(), helmsman_file_path_str))?;
 
             let latest_chart_version = latest_chart_info.get("version")
-                .with_context(|| format!("Could not find the `version` property in the latest chart version for chart `{}!", &app.chart_name))?;
+                .with_context(|| format!("Could not find the `version` property in the latest chart version for chart `{}!", app_chart_name))?;
 
             let latest_chart_version_str = latest_chart_version.as_str().unwrap();
 
-            if latest_chart_version_str != &app.chart_version {
-                info!("There is a different version available for chart `{}`: `{}`.", &app.chart_name, latest_chart_version_str);
-                let latest_values_file_path = get_values_file(&tmp_dir, &latest_chart_info)
-                    .with_context(|| format!("Couldn't retrieve the latest({}) values file for chart `{}`!", latest_chart_version_str, &app.chart_name))?;
+            if latest_chart_version_str != app_chart_version {
+                info!("There is a different version available for chart `{}`: `{}`.", app_chart_name, latest_chart_version_str);
+                println!("There is a different version available for chart `{}`: `{}`.", app_chart_name, latest_chart_version_str);
 
-                let original_chart_info = get_chart_info_for_version(&app.chart_name, &app.chart_version, &index_yaml)
-                    .with_context(|| format!("Couldn't retrieve chart info for chart `{}` and version `{}`!", &app.chart_name, &app.chart_version))?;
+                if app.values_file_path.is_some() {
+                    debug!("App `{}` has a values file. Will try to update it!", app_name);
+                    let latest_values_file_path = get_values_file(&tmp_dir, &latest_chart_info)
+                        .with_context(|| format!("Couldn't retrieve the latest({}) values file for chart `{}`!", latest_chart_version_str, app_chart_name))?;
 
-                let original_values_file_path = get_values_file(&tmp_dir, original_chart_info)
-                    .with_context(|| format!("Couldn't retrieve original({}) values file for chart `{}`!", &app.chart_version, &app.chart_name))?;
+                    let original_chart_info = get_chart_info_for_version(app_chart_name, app_chart_version, &index_yaml)
+                        .with_context(|| format!("Couldn't retrieve chart info for chart `{}` and version `{}`!", app_chart_name, app_chart_version))?;
 
-                let current_values_file_path_str = app.values_file_path.to_str().unwrap();
-                let latest_values_file_path_str = latest_values_file_path.to_str().unwrap();
-                let original_values_file_path_str = original_values_file_path.to_str().unwrap();
+                    let original_values_file_path = get_values_file(&tmp_dir, original_chart_info)
+                        .with_context(|| format!("Couldn't retrieve original({}) values file for chart `{}`!", app_chart_version, app_chart_name))?;
 
-                let exit_status = merge_values_files(current_values_file_path_str, latest_values_file_path_str, original_values_file_path_str)
-                    .with_context(|| format!("An error occurred while merging current values file `{}` with its original `{}` and its latest version `{}`!",
-                                             current_values_file_path_str,
-                                             original_values_file_path_str,
-                                             latest_values_file_path_str))?;
+                    let current_values_file_path = app.values_file_path.unwrap();
+                    let current_values_file_path_str = current_values_file_path.to_str().unwrap();
+                    let latest_values_file_path_str = latest_values_file_path.to_str().unwrap();
+                    let original_values_file_path_str = original_values_file_path.to_str().unwrap();
 
-                if exit_status.success() {
-                    println!("A new version of chart `{}` was found and the merge of the values files completed successfully!", &app.chart_name);
+                    let exit_status = merge_values_files(current_values_file_path_str, latest_values_file_path_str, original_values_file_path_str)
+                        .with_context(|| format!("An error occurred while merging current values file `{}` with its original `{}` and its latest version `{}`!",
+                                                 current_values_file_path_str,
+                                                 original_values_file_path_str,
+                                                 latest_values_file_path_str))?;
+
+                    if exit_status.success() {
+                        println!("The merge of the values files for app `{}` completed successfully!", app_chart_name);
+                    } else {
+                        println!("The merge of the values files for app `{}` completed with conflicts! Please review the resulting file!", app_chart_name);
+                    }
                 } else {
-                    println!("A new version of chart `{}` was found but the merge of the values files completed with conflicts! Please review the resulting file!", &app.chart_name);
+                    debug!("App `{}` doesn't have a values file.", app_name);
+                    println!("App `{}` doesn't have a values file and therefore no merge will happen.", app_name);
                 }
 
-                let update_helmsman_result = update_helmsman_version(&helmsman_conf.dsf_path, &app.name, &app.chart_version, latest_chart_version_str);
+                let update_helmsman_result = update_helmsman_version(&helmsman_conf.dsf_path, app_name, app_chart_version, latest_chart_version_str);
                 if update_helmsman_result.is_ok() {
-                    println!("`{}` version was updated in helmsman DSF `{}` to `{}`!", &app.name, &helmsman_conf.dsf_path.to_str().unwrap(), latest_chart_version_str)
+                    println!("`{}` version was updated in helmsman DSF `{}` to `{}`!", app_name, &helmsman_conf.dsf_path.to_str().unwrap(), latest_chart_version_str)
                 } else {
-                    println!("Failed to update `{}` version in helmsman DSF `{}` to `{}`!", &app.name, &helmsman_conf.dsf_path.to_str().unwrap(), latest_chart_version_str);
-                    return Err(anyhow::anyhow!("Failed to update `{}` version in helmsman DSF `{}` to `{}`!", &app.name, &helmsman_conf.dsf_path.to_str().unwrap(), latest_chart_version_str));
+                    println!("Failed to update `{}` version in helmsman DSF `{}` to `{}`!", app_name, &helmsman_conf.dsf_path.to_str().unwrap(), latest_chart_version_str);
+                    return Err(anyhow::anyhow!("Failed to update `{}` version in helmsman DSF `{}` to `{}`!", app_name, &helmsman_conf.dsf_path.to_str().unwrap(), latest_chart_version_str));
                 }
             }
         }
@@ -206,11 +225,12 @@ fn get_helm_repo_info(helm_repo_conf: (&Value, &Value), tmp_dir: &TempDir) -> Re
 
     let repo_url_str = helm_repo_conf.1.as_str()
         .with_context(|| "Helm repo URL is not a proper String!")?;
-    let repo_url = Url::parse(repo_url_str)
-        .with_context(|| format!("Could not parse URL in helmsman DSF `{}`", repo_url_str))?;
 
+    let repo_url_str_with_slash = if repo_url_str.ends_with("/") { String::from(repo_url_str) } else { format!("{}/", repo_url_str) };
+    let repo_url = Url::parse(repo_url_str_with_slash.as_str())
+        .with_context(|| format!("Could not parse URL in helmsman DSF `{}`", repo_url_str_with_slash))?;
     let index_yaml_url = &repo_url.join("index.yaml")
-        .with_context(|| format!("Couldn't build index.yaml url for repo `{}` with url `{}`", &repo_name_str, repo_url_str))?;
+        .with_context(|| format!("Couldn't build index.yaml url for repo `{}` with url `{}`", &repo_name_str, repo_url_str_with_slash))?;
     let index_file_path = download_file_to_temp(&tmp_dir, &index_yaml_url.as_str())
         .with_context(|| format!("Failed to download `index.yaml` file for repo `{}` from url `{}`!", &repo_name_str, &index_yaml_url))?;
 
@@ -237,9 +257,14 @@ fn get_app_info(app_conf: (&Value, &Value), helmsman_conf_parent_path: &Path) ->
     let app_repo_chart_str = app_repo_chart.as_str()
         .with_context(|| format!("The value of the `chart` property in app `{}` is not a proper String!", &app_name_str))?;
 
-    let app_repo_chart_split = app_repo_chart_str.split("/").collect::<Vec<&str>>();
-    let app_repo_name = app_repo_chart_split[0];
-    let app_chart_name = app_repo_chart_split[1];
+    let mut app_repo_name: Option<String> = None;
+    let mut app_chart_name: Option<String> = None;
+
+    if is_a_valid_chart_value(app_repo_chart_str) {
+        let app_repo_chart_split = app_repo_chart_str.split("/").collect::<Vec<&str>>();
+        app_repo_name = Some(String::from(app_repo_chart_split[0]));
+        app_chart_name = Some(String::from(app_repo_chart_split[1]));
+    }
 
     let chart_version_key: Value = "version".into();
     let app_chart_version = app_conf_mapping.get(&chart_version_key)
@@ -247,18 +272,57 @@ fn get_app_info(app_conf: (&Value, &Value), helmsman_conf_parent_path: &Path) ->
     let app_chart_version_str = app_chart_version.as_str()
         .with_context(|| format!("The value of the `version` property in app `{}` is not a proper String!", &app_name_str))?;
 
-    let chart_values_key: Value = "valuesFile".into();
-    let app_values_file = app_conf_mapping.get(&chart_values_key)
-        .with_context(|| format!("App `{}` is missing the `valuesFile` property!", &app_name_str))?;
-    let app_values_file_relative_path_str = app_values_file.as_str()
-        .with_context(|| format!("The value of the `valuesFile` property in app `{}` is not a proper String!", &app_name_str))?;
+    let mut app_values_file: Option<&Value> = None;
+    let values_file_key: Value = "valuesFile".into();
+    let app_values_file_option = app_conf_mapping.get(&values_file_key);
 
-    let values_file_path = helmsman_conf_parent_path.join(app_values_file_relative_path_str);
+    match app_values_file_option {
+        Some(values_file) => {
+            trace!("Found `valuesFile` for app {}", &app_name_str);
+            app_values_file = Some(values_file);
+        }
+        None => {
+            trace!("App {} is missing `valuesFile` property. Trying to find `valuesFiles`.", &app_name_str);
+            let values_files_key = "valuesFiles".into();
+            let app_values_files_option = app_conf_mapping.get(&values_files_key);
+
+            match app_values_files_option {
+                Some(values_files) => {
+                    trace!("Found `valuesFiles` for app {}", &app_name_str);
+                    let values_files_seq = values_files.as_sequence()
+                        .with_context(|| format!("`valuesFiles` is not an array for app `{}`!", &app_name_str))?;
+                    app_values_file = Some(values_files_seq.first().with_context(|| format!("`valuesFiles` is empty for app `{}`", &app_name_str))?);
+                }
+                None => {
+                    trace!("App {} is missing `valuesFile` and `valuesFiles` properties.", &app_name_str);
+                }
+            }
+        }
+    }
+
+    let mut values_file_path: Option<PathBuf> = None;
+    match app_values_file {
+        Some(path_value) => {
+            let app_values_file_relative_path_str = path_value.as_str()
+                .with_context(|| format!("The value of the `valuesFile` property in app `{}` is not a proper String!", &app_name_str))?;
+
+            let full_values_file_path = helmsman_conf_parent_path.join(app_values_file_relative_path_str);
+            if full_values_file_path.exists() {
+                values_file_path = Some(full_values_file_path)
+            } else {
+                debug!("Values file path `{}` for app `{}` doesn't exist!", full_values_file_path.to_str().unwrap(), &app_name_str);
+            }
+
+        }
+        None => {}
+    }
+
+
 
     let app_info = App {
         name: app_name_str,
-        repo_name: String::from(app_repo_name),
-        chart_name: String::from(app_chart_name),
+        repo_name: app_repo_name,
+        chart_name: app_chart_name,
         chart_version: String::from(app_chart_version_str),
         values_file_path,
     };
@@ -268,6 +332,10 @@ fn get_app_info(app_conf: (&Value, &Value), helmsman_conf_parent_path: &Path) ->
     return Ok(app_info);
 }
 
+fn is_a_valid_chart_value(chart_value: &str) -> bool {
+    let regex = regex::Regex::new(r"^[\w-]+/[\w-]+$").unwrap();
+    return regex.is_match(chart_value);
+}
 
 fn merge_values_files(current_values_file_path_str: &str, latest_values_file_path_str: &str, original_values_file_path_str: &str) -> Result<ExitStatus> {
     debug!("Attempting to merge current values file `{}`, with the original `{}` and the latest `{}`.", current_values_file_path_str, original_values_file_path_str, latest_values_file_path_str);
