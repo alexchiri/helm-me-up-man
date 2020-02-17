@@ -1,0 +1,32 @@
+namespaces:
+  production:
+
+helmRepos:
+  stable: "https://kubernetes-charts.storage.googleapis.com"
+  jetstack: "https://charts.jetstack.io"
+  jaegertracing: "https://jaegertracing.github.io/helm-charts"
+
+context: infra
+
+apps:
+  fluentd:
+    enabled: true
+    namespace: production
+    chart: stable/fluentd
+    version: "1.1.0"
+    valuesFiles: ["fluentd.values.yaml", "fluentd.values.TEST.yaml"]
+  cert-manager:
+    enabled: true
+    namespace: production
+    chart: jetstack/cert-manager
+    version: "v0.12.0"
+  jaeger:
+    enabled: true
+    namespace: production
+    chart: jaegertracing/jaeger-operator
+    version: "2.12.4"
+  local-service:
+    enabled: true
+    namespace: production
+    chart: ./local-service
+    version: "1.0.1"

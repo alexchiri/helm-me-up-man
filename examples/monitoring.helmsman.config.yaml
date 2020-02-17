@@ -4,12 +4,12 @@ namespaces:
 helmRepos:
   stable: "https://kubernetes-charts.storage.googleapis.com"
 
-context: logging
+context: monitoring
 
 apps:
-  fluentd:
+  datadog:
     enabled: true
     namespace: production
-    chart: stable/fluentd
-    version: "1.1.0"
-    valuesFile: "values.yaml"
+    chart: stable/datadog
+    version: "1.38.7"
+    valuesFile: "datadog.values.yaml"
