@@ -157,16 +157,23 @@ fn get_helmsman_conf_info(tmp_dir: &TempDir, helmsman_file_path: &PathBuf) -> Re
         .with_context(|| format!("Failed parsing helmsman DSF `{}`!", helmsman_file_path_str))?;
 
     // Process all the repos
-    let helm_repos_value = helmsman_config.get("helmRepos")
-        .with_context(|| format!("The helmsman DSF `{}` doesn't define `helmRepos`!", helmsman_file_path_str))?;
-    let helm_repos_conf = helm_repos_value.as_mapping()
-        .with_context(|| format!("The `helmRepos` syntax in helmsman DSF `{}` is incorrect!", helmsman_file_path_str))?;
+    let helm_repos_value_option = helmsman_config.get("helmRepos");
 
-    for helm_repo_conf in helm_repos_conf.iter() {
-        let helm_repo_info = get_helm_repo_info(helm_repo_conf, &tmp_dir)
-            .with_context(|| format!("Couldn't get helm repo info from helmsman DSF `{}`!", helmsman_file_path_str))?;
+    match helm_repos_value_option {
+        Some(helm_repos_value) => {
+            let helm_repos_conf = helm_repos_value.as_mapping()
+                .with_context(|| format!("The `helmRepos` syntax in helmsman DSF `{}` is incorrect!", helmsman_file_path_str))?;
 
-        helm_repos.push(helm_repo_info);
+            for helm_repo_conf in helm_repos_conf.iter() {
+                let helm_repo_info = get_helm_repo_info(helm_repo_conf, &tmp_dir)
+                    .with_context(|| format!("Couldn't get helm repo info from helmsman DSF `{}`!", helmsman_file_path_str))?;
+
+                helm_repos.push(helm_repo_info);
+            }
+        }
+        None => {
+            debug!("Helmsman DSF `{}` doesn't have any helm repos defined!", helmsman_file_path_str);
+        }
     }
 
     // Process all the apps

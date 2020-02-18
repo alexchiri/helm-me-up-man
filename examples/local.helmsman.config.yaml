@@ -1,0 +1,16 @@
+namespaces:
+  production:
+
+context: local
+
+apps:
+  home-baked:
+    enabled: true
+    namespace: production
+    chart: ./
+    version: "0.1.1"
+  factorio:
+    enabled: true
+    namespace: production
+    chart: stable/factorio
+    version: "1.0.0"

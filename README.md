@@ -46,8 +46,9 @@ Simply pass as many helmsman DSFs using the `-f` option of the CLI.
 For example, to update the values files in the examples, run `hmum -f examples/infra.helmsman.config.yaml -f examples/monitoring.helmsman.config.yaml`. If all goes well, the values files will have some changes. The `fluentd` file will also have merge conflicts. 
 
 ## Assumptions:
-* All helm repos used in a helmsman DSF are defined in the `helmRepos` property. This property is optional according to the [helmsman DSF specification](https://github.com/Praqma/helmsman/blob/master/docs/desired_state_specification.md#helm-repos), but unless is specified, then `hmum` cannot know what URL should a repo have.
+* All helm repos used in a helmsman DSF are defined in the `helmRepos` property. This property is optional according to the [helmsman DSF specification](https://github.com/Praqma/helmsman/blob/master/docs/desired_state_specification.md#helm-repos), but unless the helm repos are specified in the helmsman DSF, then `hmum` cannot know what URL should a repo have.
 * If you use the `valuesFiles` property to provide a list of values files, the first is the one that will be used for the merge.
+* If there are multiple apps with exactly the same version that needs to be updated in a helmsman DSF, then the version will have to be updated manually. Currently using regex to update versions in the helmsman DSF. Since I couldn't come up with a regex to uniquely identify a version for an app, `hmum` doesn't try to update the version if there are multiple matches to the version regex. This is to keep the rest of the file exactly the same. Will offer a flag in the future to allow parsing/serializing of the helmsman DSF, which allows me to modify just the right version, but it also removes comments of new lines and might make slight changes to the file.
 
 ## TODOs:
 
