@@ -1,6 +1,6 @@
 # Helm me up, man! (hmum)
 A simple tool to help automate some parts of the work needed to update Kubernetes deployments done with 
- [helmsman](https://github.com/Praqma/helmsman).
+ [helmsman](https://github.com/Praqma/helmsman)(and soon with [helm](https://helm.sh)).
 
 ## Why would this be useful?
 
