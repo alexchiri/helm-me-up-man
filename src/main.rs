@@ -102,13 +102,13 @@ fn main() -> Result<()> {
 
                 if app.values_file_path.is_some() {
                     debug!("App `{}` has a values file. Will try to update it!", app_name);
-                    let latest_values_file_path = get_values_file(&tmp_dir, &latest_chart_info)
+                    let latest_values_file_path = get_values_file(&tmp_dir, &latest_chart_info, helm_repo)
                         .with_context(|| format!("Couldn't retrieve the latest({}) values file for chart `{}`!", latest_chart_version_str, app_chart_name))?;
 
                     let original_chart_info = get_chart_info_for_version(app_chart_name, app_chart_version, &index_yaml)
                         .with_context(|| format!("Couldn't retrieve chart info for chart `{}` and version `{}`!", app_chart_name, app_chart_version))?;
 
-                    let original_values_file_path = get_values_file(&tmp_dir, original_chart_info)
+                    let original_values_file_path = get_values_file(&tmp_dir, original_chart_info, helm_repo)
                         .with_context(|| format!("Couldn't retrieve original({}) values file for chart `{}`!", app_chart_version, app_chart_name))?;
 
                     let current_values_file_path = app.values_file_path.unwrap();
@@ -389,29 +389,46 @@ fn get_chart_info_for_version<'a>(chart_name: &str, chart_version: &str, index_y
 }
 
 
-fn get_values_file(tmp_dir: &TempDir, latest_chart_info: &Value) -> Result<PathBuf> {
-    let chart_name = latest_chart_info.get("name")
+fn get_values_file(tmp_dir: &TempDir, chart_info: &Value, repo: &Repo) -> Result<PathBuf> {
+    let chart_name = chart_info.get("name")
         .with_context(|| "Couldn't find property `name` in chart info!")?.as_str().unwrap();
     debug!("Retrieving values file for chart `{}`", chart_name);
 
-    let latest_chart_archive_path = download_chart_archive(&tmp_dir, latest_chart_info)
-        .with_context(|| "Couldn't download the latest chart archive!")?;
-    let latest_chart_archive_path_str = latest_chart_archive_path.to_str().unwrap();
-    let latest_chart_untared_path = untar_archive(&latest_chart_archive_path, &tmp_dir)
-        .with_context(|| format!("Failed to untar the chart archive `{}`!", &latest_chart_archive_path_str))?;
-    let latest_chart_values_file_path = latest_chart_untared_path.join(format!("{}/values.yaml", chart_name));
-
-    debug!("Values file was downloaded successfully to `{}`", latest_chart_values_file_path.to_str().unwrap());
-    return Ok(latest_chart_values_file_path);
-}
-
-fn download_chart_archive(tmp_dir: &TempDir, latest_chart_info: &Value) -> Result<PathBuf> {
-    let latest_chart_urls_seq = latest_chart_info.get("urls")
+    let chart_urls_seq = chart_info.get("urls")
         .with_context(|| "Could not find the `urls` property in the latest chart version!")?
         .as_sequence().unwrap();
-    let latest_chart_url_str = latest_chart_urls_seq.first()
+    let chart_url_str = chart_urls_seq.first()
         .with_context(|| "Could not retrieve the latest url for chart!")?
         .as_str().unwrap();
+
+    let mut chart_url = Url::parse(chart_url_str);
+    match chart_url {
+        Err(e) => {
+            info!("It seems that the chart URL {} could not be parsed: {}. This might be a relative URL, so will attempt to appent it to the chart repo URL.", chart_url_str, e);
+
+            let latest_chart_absolute_url = repo.url.join(chart_url_str)
+                .with_context(|| format!("The URL provided in the chart is not an absolute or a relative URL: {}", chart_url_str))?;
+            chart_url = Ok(latest_chart_absolute_url);
+        }
+
+        Ok(_) => {
+            debug!("Chart URL is valid `{}`", chart_url_str);
+        }
+    }
+
+    let chart_archive_path = download_chart_archive(&tmp_dir, chart_url.unwrap().as_str())
+        .with_context(|| "Couldn't download the latest chart archive!")?;
+
+    let chart_archive_path_str = chart_archive_path.to_str().unwrap();
+    let chart_untared_path = untar_archive(&chart_archive_path, &tmp_dir)
+        .with_context(|| format!("Failed to untar the chart archive `{}`!", &chart_archive_path_str))?;
+    let chart_values_file_path = chart_untared_path.join(format!("{}/values.yaml", chart_name));
+
+    debug!("Values file was downloaded successfully to `{}`", chart_values_file_path.to_str().unwrap());
+    return Ok(chart_values_file_path);
+}
+
+fn download_chart_archive(tmp_dir: &TempDir, latest_chart_url_str: &str) -> Result<PathBuf> {
     debug!("Attempting to download chart from `{}`", latest_chart_url_str);
     let latest_chart_archive_path = download_file_to_temp(&tmp_dir, latest_chart_url_str)
         .with_context(|| format!("Failed to download chart archive from `{}`!", latest_chart_url_str))?;
