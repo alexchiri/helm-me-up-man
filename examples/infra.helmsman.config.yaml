@@ -3,7 +3,7 @@ namespaces:
   argocd:
 
 helmRepos:
-  stable: "https://kubernetes-charts.storage.googleapis.com"
+  stable: "https://charts.helm.sh/stable"
   jetstack: "https://charts.jetstack.io"
   jaegertracing: "https://jaegertracing.github.io/helm-charts"
   argo: "https://argoproj.github.io/argo-helm"
@@ -15,18 +15,18 @@ apps:
     enabled: true
     namespace: production
     chart: stable/fluentd
-    version: "1.1.0"
+    version: "2.5.3"
     valuesFiles: ["fluentd.values.yaml", "fluentd.values.TEST.yaml"]
   cert-manager:
     enabled: true
     namespace: production
     chart: jetstack/cert-manager
-    version: "v0.12.0"
+    version: "v1.7.0-alpha.0"
   jaeger:
     enabled: true
     namespace: production
     chart: jaegertracing/jaeger-operator
-    version: "2.12.4"
+    version: "2.27.1"
   local-service:
     enabled: true
     namespace: production
@@ -36,5 +36,5 @@ apps:
     enabled: true
     namespace: argocd
     chart: argo/argo-cd
-    version: "2.0.0"
+    version: "3.29.5"
     valuesFile: "argocd-values.yaml"

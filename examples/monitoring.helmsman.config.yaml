@@ -2,7 +2,7 @@ namespaces:
   production:
 
 helmRepos:
-  stable: "https://kubernetes-charts.storage.googleapis.com"
+  stable: "https://charts.helm.sh/stable"
 
 context: monitoring
 
